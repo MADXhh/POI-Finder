@@ -71,22 +71,43 @@ def cumulative_distances(coords):
     return distances
 
 # === Interpolate every step_km ===
-def interpolate_every_km(coords, step_km=4):
-    sampled = [coords[0]]
-    distances = [0.0]
-    dist_accum = 0.0
-    total_distance = 0.0
-    last = coords[0]
-    for pt in coords[1:]:
-        dist = geodesic(last, pt).km
-        dist_accum += dist
-        total_distance += dist
-        if dist_accum >= step_km:
-            sampled.append(pt)
-            distances.append(round(total_distance, 2))
-            dist_accum = 0.0
-            last = pt
-    return sampled, distances
+def interpolate_every_km(coords, step_km=4, skip_first=0, skip_last=0):
+    cum_dists = cumulative_distances(coords)
+    total_dist = cum_dists[-1]
+    sampled = []
+    sampled_dists = []
+
+    target_dist = skip_first
+    idx = 1
+
+    while target_dist < (total_dist - skip_last):
+        # Suche das erste Segment, das die Zielentfernung überschreitet
+        while idx < len(cum_dists) and cum_dists[idx] < target_dist:
+            idx += 1
+        if idx >= len(coords):
+            break
+
+        # Interpolation zwischen Punkt idx-1 und idx
+        prev_point = coords[idx - 1]
+        next_point = coords[idx]
+        dist_before = cum_dists[idx - 1]
+        dist_after = cum_dists[idx]
+        segment_length = dist_after - dist_before
+
+        if segment_length == 0:
+            ratio = 0
+        else:
+            ratio = (target_dist - dist_before) / segment_length
+
+        lat = prev_point[0] + (next_point[0] - prev_point[0]) * ratio
+        lon = prev_point[1] + (next_point[1] - prev_point[1]) * ratio
+
+        sampled.append((lat, lon))
+        sampled_dists.append(round(target_dist, 2))
+
+        target_dist += step_km
+
+    return sampled, sampled_dists
 
 # === Overpass API setup ===
 api = overpy.Overpass()
@@ -160,13 +181,13 @@ def save_gpx(route_coords, pois, filename):
         f.write(gpx.to_xml())
 
 # === Analysis thread function ===
-def analyze_thread(path, step_km, radius, travel_date):
+def analyze_thread(path, step_km, radius, travel_date, skip_first, skip_last):
     try:
         path_name = os.path.splitext(os.path.basename(path))[0] # fileName without ext
         path_dir = os.path.dirname(path)
         route_coords = load_gpx_file(path)
         cum_distances = cumulative_distances(route_coords)
-        sample_points, _ = interpolate_every_km(route_coords, step_km)
+        sample_points, _ = interpolate_every_km(route_coords, step_km, skip_first, skip_last)
         pois = {}
         total_steps = len(sample_points)
 
@@ -273,9 +294,11 @@ def start_analysis():
         travel_date = entry_date.get().strip()
         step_km = int(entry_step.get())
         radius = int(entry_radius.get())
+        skip_first = int(entry_skip_first.get()) 
+        skip_last = int(entry_skip_last.get())
         threading.Thread(
             target=analyze_thread,
-            args=(path, step_km, radius, travel_date),
+            args=(path, step_km, radius, travel_date, skip_first, skip_last),
             daemon=True
         ).start()
     except Exception as e:
@@ -304,8 +327,18 @@ entry_date = tk.Entry(frame)
 entry_date.insert(0, "")
 entry_date.grid(row=2, column=1, sticky="W")
 
+tk.Label(frame, text="Skip first (km):").grid(row=3, column=0, sticky="W")
+entry_skip_first = tk.Entry(frame)
+entry_skip_first.insert(0, "15")
+entry_skip_first.grid(row=3, column=1, sticky="W")
+
+tk.Label(frame, text="Skip last (km):").grid(row=4, column=0, sticky="W")
+entry_skip_last = tk.Entry(frame)
+entry_skip_last.insert(0, "15")
+entry_skip_last.grid(row=4, column=1, sticky="W")
+
 btn = tk.Button(frame, text="Select GPX file and analyze", command=start_analysis)
-btn.grid(row=4, column=0, columnspan=2, pady=10)
+btn.grid(row=5, column=0, columnspan=2, pady=10)
 
 
 # === Progress bar ===
